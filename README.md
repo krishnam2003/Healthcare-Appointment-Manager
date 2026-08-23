@@ -111,3 +111,52 @@ npm run dev
 
 # 6. Build for production
 npm build
+
+
+ Security Features
+✅ JWT with refresh token rotation
+
+✅ Bcrypt password hashing
+
+✅ Role-based access control
+
+✅ Zod validation on all inputs
+
+✅ Helmet.js security headers
+
+✅ CORS configured
+
+✅ Request ID tracking
+
+✅ Centralized error handling
+
+🗄️ Database Schema
+Key entities:
+
+User (with role: ADMIN, DOCTOR, PATIENT)
+
+PatientProfile
+
+DoctorProfile
+
+DoctorAvailability
+
+DoctorLeave
+
+Appointment
+
+SymptomSubmission
+
+LLMSummary
+
+EmailLog
+
+Notification
+
+CalendarConnection
+
+CalendarEvent
+
+MedicationReminder
+
+BackgroundJob
