@@ -54,3 +54,60 @@ A production-grade full-stack application for managing healthcare appointments, 
 - Google Calendar API
 
 ## 📁 Project Structure
+Healthcare-Appointment-Manager/
+├── frontend/ # React frontend
+│ ├── src/
+│ └── package.json
+├── backend/ # Express backend
+│ ├── prisma/ # Database schema
+│ ├── src/
+│ │ ├── ai/ # LLM summary generation
+│ │ ├── appointments/ # Appointment lifecycle
+│ │ ├── auth/ # JWT authentication
+│ │ ├── availability/ # Doctor availability
+│ │ ├── calendar/ # Google Calendar integration
+│ │ ├── common/ # Shared utilities
+│ │ ├── config/ # Environment configuration
+│ │ ├── doctors/ # Doctor management
+│ │ ├── email/ # Email service
+│ │ ├── jobs/ # Background jobs
+│ │ ├── leave/ # Leave management
+│ │ ├── middleware/ # Error handling, auth
+│ │ ├── notifications/ # Notification service
+│ │ ├── patients/ # Patient management
+│ │ └── reminders/ # Medication reminders
+│ └── package.json
+├── docs/ # Documentation
+├── docker/ # Docker configuration
+
+
+## 🔧 Installation
+
+### Prerequisites
+- Node.js 20.19+
+- pnpm (via Corepack)
+- PostgreSQL
+- Redis
+
+### Setup
+
+```bash
+# 1. Enable Corepack and install dependencies
+corepack enable
+pnpm install
+
+# 2. Copy environment variables
+cp .env.example .env
+
+# 3. Configure your .env file (see Environment Variables section)
+
+# 4. Setup database
+pnpm --filter @healthcare/server prisma:generate
+pnpm --filter @healthcare/server prisma:migrate
+pnpm --filter @healthcare/server prisma:seed
+
+# 5. Run development server
+npm run dev
+
+# 6. Build for production
+npm build
