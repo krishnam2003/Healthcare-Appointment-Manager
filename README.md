@@ -2,11 +2,7 @@
 
 A production-grade full-stack application for managing healthcare appointments, doctor availability, AI-powered visit summaries, and calendar synchronization.
 
-## 🚀 Live Demo
 
-- **Frontend:** https://healthcare-appointment-manager-clie.vercel.app
-- **Backend API:** https://healthcare-appointment-manager-zfsp.onrender.com
-- **API Docs:** https://healthcare-appointment-manager-zfsp.onrender.com/docs
 
 ### Demo Credentials
 
