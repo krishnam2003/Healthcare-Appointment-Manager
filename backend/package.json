@@ -2,11 +2,11 @@
   "name": "healthcare-app",
   "version": "1.0.0",
   "description": "Healthcare Appointment and Follow-up Manager",
-  "main": "dist/server.js",
+  "main": "dist/server.ts",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node dist/server.ts",
     "seed": "tsx src/database/seed.ts"
   },
   "dependencies": {
