@@ -1,0 +1,437 @@
+import {
+  AppointmentStatus,
+  type Prisma,
+  type PrismaClient,
+  type LLMSummaryType,
+  type UserRole,
+} from '../generated/prisma/client';
+
+import { appointmentFitsAvailability, toClinicDateKey } from '../availability/time';
+import type { PaginationOptions } from '../common/pagination';
+import { toSkip } from '../common/pagination';
+import { ApplicationError } from '../errors/application-error';
+
+const appointmentInclude = {
+  doctor: {
+    include: {
+      specialization: true,
+      user: true,
+    },
+  },
+  patient: {
+    include: {
+      user: true,
+    },
+  },
+  summaries: true,
+  symptoms: true,
+} satisfies Prisma.AppointmentInclude;
+
+export type AppointmentRecord = Prisma.AppointmentGetPayload<{
+  include: typeof appointmentInclude;
+}>;
+
+export type AppointmentActorContext = Readonly<{
+  userId: string;
+  role: UserRole;
+}>;
+
+export type AppointmentListFilters = Readonly<{
+  status?: AppointmentStatus;
+  doctorId?: string;
+  patientId?: string;
+}>;
+
+type AppointmentSymptomSubmission = Readonly<{
+  symptoms: string;
+  duration?: string | undefined;
+  severity?: string | undefined;
+  additionalNotes?: string | undefined;
+}>;
+
+export type BookingValidationContext = Readonly<{
+  doctor: Prisma.DoctorProfileGetPayload<{
+    include: {
+      user: true;
+      availabilities: true;
+      leaves: true;
+    };
+  }>;
+  patient: Prisma.PatientProfileGetPayload<{
+    include: {
+      user: true;
+    };
+  }>;
+  conflictingAppointment: { id: string } | null;
+}>;
+
+export class AppointmentsRepository {
+  public constructor(private readonly database: PrismaClient) {}
+
+  public findPatientProfileByUserId(userId: string): Promise<{ id: string } | null> {
+    return this.database.patientProfile.findUnique({
+      where: {
+        userId,
+      },
+      select: {
+        id: true,
+      },
+    });
+  }
+
+  public findDoctorProfileByUserId(userId: string): Promise<{ id: string } | null> {
+    return this.database.doctorProfile.findUnique({
+      where: {
+        userId,
+      },
+      select: {
+        id: true,
+      },
+    });
+  }
+
+  public findById(id: string): Promise<AppointmentRecord | null> {
+    return this.database.appointment.findUnique({
+      where: {
+        id,
+      },
+      include: appointmentInclude,
+    });
+  }
+
+  public async list(
+    filters: AppointmentListFilters,
+    actor: AppointmentActorContext,
+    pagination: PaginationOptions,
+  ): Promise<Readonly<{ appointments: AppointmentRecord[]; total: number }>> {
+    const where = await this.toScopedWhereInput(filters, actor);
+
+    const [appointments, total] = await this.database.$transaction([
+      this.database.appointment.findMany({
+        where,
+        include: appointmentInclude,
+        orderBy: {
+          startTime: 'desc',
+        },
+        skip: toSkip(pagination),
+        take: pagination.pageSize,
+      }),
+      this.database.appointment.count({
+        where,
+      }),
+    ]);
+
+    return {
+      appointments,
+      total,
+    };
+  }
+
+  public async create(
+    input: Readonly<{
+      doctorId: string;
+      patientId: string;
+      startTime: Date;
+      endTime: Date;
+      actorId: string;
+      symptomSubmission?: AppointmentSymptomSubmission;
+    }>,
+  ): Promise<AppointmentRecord> {
+    return this.database.$transaction(
+      async (transaction) => {
+        return this.createInsideTransaction(transaction, input);
+      },
+      {
+        isolationLevel: 'Serializable',
+      },
+    );
+  }
+
+  public async reschedule(
+    input: Readonly<{
+      appointmentId: string;
+      doctorId: string;
+      patientId: string;
+      startTime: Date;
+      endTime: Date;
+      actorId: string;
+    }>,
+  ): Promise<AppointmentRecord> {
+    return this.database.$transaction(
+      async (transaction) => {
+        await this.validateBookingInsideTransaction(transaction, {
+          doctorId: input.doctorId,
+          patientId: input.patientId,
+          startTime: input.startTime,
+          endTime: input.endTime,
+          excludedAppointmentId: input.appointmentId,
+        });
+
+        return transaction.appointment.update({
+          where: {
+            id: input.appointmentId,
+          },
+          data: {
+            startTime: input.startTime,
+            endTime: input.endTime,
+            status: AppointmentStatus.CONFIRMED,
+            holdExpiresAt: null,
+            cancellationReason: null,
+            updatedBy: input.actorId,
+          },
+          include: appointmentInclude,
+        });
+      },
+      {
+        isolationLevel: 'Serializable',
+      },
+    );
+  }
+
+  public updateStatus(
+    id: string,
+    input: Readonly<{
+      status: AppointmentStatus;
+      actorId: string;
+    }>,
+  ): Promise<AppointmentRecord> {
+    return this.database.appointment.update({
+      where: {
+        id,
+      },
+      data: {
+        status: input.status,
+        updatedBy: input.actorId,
+      },
+      include: appointmentInclude,
+    });
+  }
+
+  public cancel(
+    id: string,
+    input: Readonly<{
+      cancellationReason: string;
+      actorId: string;
+    }>,
+  ): Promise<AppointmentRecord> {
+    return this.database.appointment.update({
+      where: {
+        id,
+      },
+      data: {
+        status: AppointmentStatus.CANCELLED,
+        cancellationReason: input.cancellationReason,
+        updatedBy: input.actorId,
+      },
+      include: appointmentInclude,
+    });
+  }
+
+  public async getBookingValidationContext(
+    input: Readonly<{
+      doctorId: string;
+      patientId: string;
+      startTime: Date;
+      endTime: Date;
+      excludedAppointmentId?: string;
+    }>,
+  ): Promise<BookingValidationContext> {
+    return this.database.$transaction(async (transaction) =>
+      this.validateBookingInsideTransaction(transaction, input),
+    );
+  }
+
+  private async createInsideTransaction(
+    transaction: Prisma.TransactionClient,
+    input: Readonly<{
+      doctorId: string;
+      patientId: string;
+      startTime: Date;
+      endTime: Date;
+      actorId: string;
+      symptomSubmission?: AppointmentSymptomSubmission;
+    }>,
+  ): Promise<AppointmentRecord> {
+    await this.validateBookingInsideTransaction(transaction, input);
+
+    return transaction.appointment.create({
+      data: {
+        doctorId: input.doctorId,
+        patientId: input.patientId,
+        startTime: input.startTime,
+        endTime: input.endTime,
+        status: AppointmentStatus.CONFIRMED,
+        ...(input.symptomSubmission === undefined
+          ? {}
+          : {
+              symptoms: {
+                create: {
+                  symptoms: input.symptomSubmission.symptoms,
+                  ...(input.symptomSubmission.duration === undefined
+                    ? {}
+                    : { duration: input.symptomSubmission.duration }),
+                  ...(input.symptomSubmission.severity === undefined
+                    ? {}
+                    : { severity: input.symptomSubmission.severity }),
+                  ...(input.symptomSubmission.additionalNotes === undefined
+                    ? {}
+                    : { additionalNotes: input.symptomSubmission.additionalNotes }),
+                  createdBy: input.actorId,
+                  updatedBy: input.actorId,
+                },
+              },
+            }),
+        createdBy: input.actorId,
+        updatedBy: input.actorId,
+      },
+      include: appointmentInclude,
+    });
+  }
+
+  private async validateBookingInsideTransaction(
+    transaction: Prisma.TransactionClient,
+    input: Readonly<{
+      doctorId: string;
+      patientId: string;
+      startTime: Date;
+      endTime: Date;
+      excludedAppointmentId?: string;
+    }>,
+  ): Promise<BookingValidationContext> {
+    const [doctor, patient, conflictingAppointment] = await Promise.all([
+      transaction.doctorProfile.findUnique({
+        where: {
+          id: input.doctorId,
+        },
+        include: {
+          user: true,
+          availabilities: {
+            where: {
+              isActive: true,
+            },
+          },
+          leaves: {
+            where: {
+              status: 'ACTIVE',
+            },
+          },
+        },
+      }),
+      transaction.patientProfile.findUnique({
+        where: {
+          id: input.patientId,
+        },
+        include: {
+          user: true,
+        },
+      }),
+      transaction.appointment.findFirst({
+        where: {
+          doctorId: input.doctorId,
+          status: {
+            in: [AppointmentStatus.HELD, AppointmentStatus.CONFIRMED],
+          },
+          startTime: {
+            lt: input.endTime,
+          },
+          endTime: {
+            gt: input.startTime,
+          },
+          ...(input.excludedAppointmentId === undefined
+            ? {}
+            : {
+                id: {
+                  not: input.excludedAppointmentId,
+                },
+              }),
+        },
+        select: {
+          id: true,
+        },
+      }),
+    ]);
+
+    if (doctor === null) {
+      throw new ApplicationError('Doctor was not found.', 404, 'DOCTOR_NOT_FOUND');
+    }
+
+    if (patient === null) {
+      throw new ApplicationError('Patient was not found.', 404, 'PATIENT_NOT_FOUND');
+    }
+
+    if (!doctor.isActive || !doctor.user.isActive) {
+      throw new ApplicationError('Doctor is inactive.', 409, 'DOCTOR_INACTIVE');
+    }
+
+    if (!patient.user.isActive) {
+      throw new ApplicationError('Patient is inactive.', 409, 'PATIENT_INACTIVE');
+    }
+
+    if (conflictingAppointment !== null) {
+      throw new ApplicationError('The selected appointment slot is already booked.', 409, 'SLOT_BOOKED');
+    }
+
+    if (doctor.leaves.some((leave) => appointmentDateFallsWithinLeave(input.startTime, leave))) {
+      throw new ApplicationError('Doctor is on leave for the selected date.', 409, 'DOCTOR_ON_LEAVE');
+    }
+
+    if (!doctor.availabilities.some((availability) => appointmentFitsAvailability(input, availability))) {
+      throw new ApplicationError(
+        'Appointment is outside doctor availability.',
+        409,
+        'OUTSIDE_DOCTOR_AVAILABILITY',
+      );
+    }
+
+    return {
+      doctor,
+      patient,
+      conflictingAppointment,
+    };
+  }
+
+  private async toScopedWhereInput(
+    filters: AppointmentListFilters,
+    actor: AppointmentActorContext,
+  ): Promise<Prisma.AppointmentWhereInput> {
+    const baseWhere: Prisma.AppointmentWhereInput = {
+      ...(filters.status === undefined ? {} : { status: filters.status }),
+      ...(filters.doctorId === undefined ? {} : { doctorId: filters.doctorId }),
+      ...(filters.patientId === undefined ? {} : { patientId: filters.patientId }),
+    };
+
+    if (actor.role === 'ADMIN') {
+      return baseWhere;
+    }
+
+    if (actor.role === 'DOCTOR') {
+      const doctorProfile = await this.findDoctorProfileByUserId(actor.userId);
+      return {
+        ...baseWhere,
+        doctorId: doctorProfile?.id ?? '00000000-0000-0000-0000-000000000000',
+      };
+    }
+
+    const patientProfile = await this.findPatientProfileByUserId(actor.userId);
+    return {
+      ...baseWhere,
+      patientId: patientProfile?.id ?? '00000000-0000-0000-0000-000000000000',
+    };
+  }
+
+}
+
+export function findSummaryByType(
+  appointment: AppointmentRecord,
+  type: LLMSummaryType,
+): AppointmentRecord['summaries'][number] | null {
+  return appointment.summaries.find((summary) => summary.type === type) ?? null;
+}
+
+function appointmentDateFallsWithinLeave(
+  appointmentStart: Date,
+  leave: Readonly<{ startDate: Date; endDate: Date }>,
+): boolean {
+  const appointmentDate = toClinicDateKey(appointmentStart);
+  return appointmentDate >= toClinicDateKey(leave.startDate) && appointmentDate <= toClinicDateKey(leave.endDate);
+}
