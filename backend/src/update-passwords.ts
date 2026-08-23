@@ -1,8 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { prisma } from './config/prisma';
 
-const prisma = new PrismaClient();
-
-async function main() {
+async function main(): Promise<void> {
   const passwordHash =
     '$2b$12$UXUgDzDX4ZY4caID.ijMRugtzKuixTOl81UAzL4sEj.Qdgc4v2Uq6';
 
@@ -17,15 +15,23 @@ async function main() {
 
   for (const email of emails) {
     await prisma.user.update({
-      where: { email },
-      data: { passwordHash },
+      where: {
+        email,
+      },
+      data: {
+        passwordHash,
+      },
     });
+
     console.log(`Updated password for ${email}`);
   }
 }
 
 main()
-  .catch(console.error)
+  .catch((error: unknown) => {
+    console.error('Failed to update passwords:', error);
+    process.exitCode = 1;
+  })
   .finally(async () => {
     await prisma.$disconnect();
   });
