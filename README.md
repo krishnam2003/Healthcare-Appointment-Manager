@@ -14,7 +14,7 @@ Database: PostgreSQL
 Cache: Redis
 
 Production URLs
-Frontend: https://healthcare-appointment-manager-clie.vercel.app
+Frontend: https://healthcare-appointment-manager-rufg.vercel.app
 
 Backend: https://healthcare-appointment-manager-zfsp.onrender.com
 
