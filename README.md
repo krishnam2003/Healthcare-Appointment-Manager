@@ -2,7 +2,21 @@
 
 A production-grade full-stack application for managing healthcare appointments, doctor availability, AI-powered visit summaries, and calendar synchronization.
 
+🚀 Deployment
+The application is deployed on:
 
+Frontend: Vercel
+
+Backend: Render
+
+Database: PostgreSQL
+
+Cache: Redis
+
+Production URLs
+Frontend: https://healthcare-appointment-manager-clie.vercel.app
+
+Backend: https://healthcare-appointment-manager-zfsp.onrender.com
 
 ### Demo Credentials
 
